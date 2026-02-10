@@ -1,15 +1,11 @@
 # inventory_service.py
 # pip install fastapi uvicorn prometheus-client pydantic psutil
-import asyncio
-from http.client import HTTPException
-import random
-import os, logging, datetime, re
-import time
+import os, logging, datetime, re, time, json, random, asyncio
 from typing import Dict 
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel, Field
-from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import Response, JSONResponse
 
 SERVICE = os.getenv("SERVICE", "inventory")
 FAULT = {"mode": os.getenv("FAULT", "none"), "p_error": 0.2, "latency_ms": 300, "cpu_ms": 200}
@@ -31,16 +27,16 @@ if not logger.handlers:
 # method: HTTP verb (GET, POST, etc)
 # route : templated route path (/items/{item_id}, etc)
 # status: HTTP response status code (200, 404, 500, etc)
-REQS = Counter("http_requests_total", "Total HTTP requests", ["service", "method", "route", "status"])
-LAT = Histogram(
+REQS = Counter("http_requests_total", "Total HTTP requests", ["service", "method", "route", "status"]) # Request
+LAT = Histogram(            # Latency
     "http_request_duration_seconds",
     "HTTP request latency",
     ["service", "route", "method"],
     # (e.g) Request that takes less than or equal to x seconds (x ms) falls into the bucket
     buckets= [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 5.0]
 )
-ERRS = Counter("http_errors_total", "5xx error count", ["service", "route", "status"])
-INV_SIZE = Gauge("inventory_items", "Current inventory items", ["service"])
+ERRS = Counter("http_errors_total", "5xx error count", ["service", "route", "status"])  # Errors
+INV_SIZE = Gauge("inventory_items", "Current inventory items", ["service"])  # Inventory size
 
 # ---- Data model / store ----
 class Item(BaseModel):
@@ -66,7 +62,7 @@ async def metrics_mw(request: Request, call_next):
         return response
     except Exception:
         # Log unexpected exceptions
-        logger.exception("REQ EXC: %s %s", method, request.uurl.path)
+        logger.exception("REQ EXC: %s %s", method, request.url.path)
         raise
     finally:
         # <-- get templated path AFTER call_next()
@@ -76,7 +72,7 @@ async def metrics_mw(request: Request, call_next):
         dur = time.perf_counter() - start
 
         LAT.labels(SERVICE,route_path, method).observe(dur)
-        REQS.laabels(SERVICE, method, route_path, status).inc()
+        REQS.labels(SERVICE, method, route_path, status).inc()
         if status.startswith("5"):
             ERRS.labels(SERVICE, route_path, status).inc()
          # Write structured request log line
